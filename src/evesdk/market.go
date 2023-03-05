@@ -14,6 +14,7 @@ import (
 type MarketOrder struct {
 	OrderID      int64     `json:"order_id,omitempty"`
 	TypeID       int32     `json:"type_id,omitempty"`
+	TypeData     *TypeData `json:"type_data,omitempty"`
 	LocationID   int64     `json:"location_id,omitempty"`
 	VolumeTotal  int32     `json:"volume_total,omitempty"`
 	VolumeRemain int32     `json:"volume_remain,omitempty"`
@@ -35,7 +36,10 @@ func (m *MarketOrder) String() string {
 	return string(s)
 }
 
-func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Region) ([]*MarketOrder, error) { // ToDo: Add regionID as parameter.
+// ListAllMarketOrdersForRegion returns all market orders for a region.
+// ToDo: Add regionID as parameter.
+func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Region) ([]*MarketOrder, error) {
+
 	const allOrderType = "all" // ToDo: Add orderType as parameter.
 	orders, resp, err := e.Eve.ESI.MarketApi.GetMarketsRegionIdOrders(ctx, allOrderType, region.RegionID, nil)
 	if err != nil {
@@ -58,6 +62,8 @@ func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 	marketMu := &sync.RWMutex{}
 	marketOrders := []*MarketOrder{}
 
+	typeDataCache := make(map[int32]*TypeData)
+
 	addOrders := func(orders []esi.GetMarketsRegionIdOrders200Ok) {
 		for _, order := range orders {
 			m := &MarketOrder{
@@ -74,13 +80,29 @@ func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 				Range_:       order.Range_,
 				ExpiresIn:    timeUntilCacheExpires(resp),
 			}
+
+			marketMu.Lock()
+			typeData, ok := typeDataCache[m.TypeID]
+			marketMu.Unlock()
+
+			if !ok {
+				typeData, err = e.GetTypeData(ctx, m.TypeID)
+				if err != nil {
+					fmt.Println("GetType failed:", err)
+				} else {
+					marketMu.Lock()
+					typeDataCache[m.TypeID] = typeData
+					marketMu.Unlock()
+				}
+			}
+			m.TypeData = typeData
+
 			marketMu.Lock()
 			marketOrders = append(marketOrders, m)
 			marketMu.Unlock()
 		}
 	}
 	addOrders(orders)
-	fmt.Println("Page [", 0, "] done of [", pages, "] ", len(orders), " orders added.")
 
 	// Get the other pages concurrently. We skip page 0 because we already have it.
 	for i := 1; int32(i) <= pages; i++ {
@@ -98,8 +120,6 @@ func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 				&esi.GetMarketsRegionIdOrdersOpts{Page: optional.NewInt32(page)},
 			)
 			addOrders(orders)
-			fmt.Println("Page [", page, "] done of [", pages, "] ", len(orders), " orders added.")
-
 		}(int32(i))
 	}
 
