@@ -16,6 +16,7 @@ type MarketOrder struct {
 	TypeID       int32     `json:"type_id,omitempty"`
 	TypeData     *TypeData `json:"type_data,omitempty"`
 	LocationID   int64     `json:"location_id,omitempty"`
+	SystemId     int32     `json:"system_id,omitempty"`
 	VolumeTotal  int32     `json:"volume_total,omitempty"`
 	VolumeRemain int32     `json:"volume_remain,omitempty"`
 	MinVolume    int32     `json:"min_volume,omitempty"`
@@ -38,7 +39,7 @@ func (m *MarketOrder) String() string {
 
 // ListAllMarketOrdersForRegion returns all market orders for a region.
 // ToDo: Add regionID as parameter.
-func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Region) ([]*MarketOrder, error) {
+func (e *EveLand) ListAllMarketOrdersForRegion(ctx context.Context, region *Region) ([]*MarketOrder, error) {
 
 	const allOrderType = "all" // ToDo: Add orderType as parameter.
 	orders, resp, err := e.Eve.ESI.MarketApi.GetMarketsRegionIdOrders(ctx, allOrderType, region.RegionID, nil)
@@ -70,6 +71,7 @@ func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 				OrderID:      order.OrderId,
 				TypeID:       order.TypeId,
 				LocationID:   order.LocationId,
+				SystemId:     order.SystemId,
 				VolumeTotal:  order.VolumeTotal,
 				VolumeRemain: order.VolumeRemain,
 				MinVolume:    order.MinVolume,
@@ -81,19 +83,23 @@ func (e *eveland) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 				ExpiresIn:    timeUntilCacheExpires(resp),
 			}
 
-			marketMu.Lock()
+			marketMu.RLock()
 			typeData, ok := typeDataCache[m.TypeID]
-			marketMu.Unlock()
+			marketMu.RUnlock()
 
 			if !ok {
-				typeData, err = e.GetTypeData(ctx, m.TypeID)
-				if err != nil {
-					fmt.Println("GetType failed:", err)
-				} else {
-					marketMu.Lock()
-					typeDataCache[m.TypeID] = typeData
-					marketMu.Unlock()
+				marketMu.Lock()
+				// Check again in case another goroutine already got it.
+				typeData, ok = typeDataCache[m.TypeID]
+				if !ok {
+					typeData, err = e.GetTypeData(ctx, m.TypeID)
+					if err != nil {
+						fmt.Println("GetType failed:", err)
+					} else {
+						typeDataCache[m.TypeID] = typeData
+					}
 				}
+				marketMu.Unlock()
 			}
 			m.TypeData = typeData
 
