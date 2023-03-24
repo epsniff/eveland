@@ -2,143 +2,164 @@ package dbmarketorders
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"log"
+	"reflect"
 	"strconv"
+	"time"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/blugelabs/bluge"
 	"github.com/epsniff/eveland/src/evesdk"
 )
 
 type OrderDataDB struct {
-	pdbs   map[string]*pebble.DB
-	eveSDK *evesdk.EveLand
+	indexWriter *bluge.Writer
+	indexReader *bluge.Reader
+	eveSDK      *evesdk.EveLand
 
 	dbpath string
 }
 
 func New(eveSDK *evesdk.EveLand, dbpath string) (*OrderDataDB, error) {
 	odb := &OrderDataDB{
-		pdbs:   make(map[string]*pebble.DB),
 		eveSDK: eveSDK,
 	}
 
 	odb.dbpath = dbpath
+	config := bluge.DefaultConfig(odb.dbpath)
+
+	w, err := bluge.OpenWriter(config)
+	if err != nil {
+		return nil, fmt.Errorf("error opening Bluge index: %v", err)
+	}
+	odb.indexWriter = w
+
+	r, err := w.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("error opening Bluge index reader: %v", err)
+	}
+	odb.indexReader = r
 
 	return odb, nil
 
 }
 
-// CloseDB closes all open databases.
+// CloseDB closes the open database.
 func (o *OrderDataDB) CloseDB() error {
-	for _, pdb := range o.pdbs {
-		if err := pdb.Close(); err != nil {
-			return fmt.Errorf("error closing db: %v", err)
-		}
+	err := o.indexWriter.Close()
+	if err != nil {
+		return fmt.Errorf("error closing Bluge index writer: %v", err)
+	}
+	err = o.indexReader.Close()
+	if err != nil {
+		return fmt.Errorf("error closing Bluge index reader: %v", err)
 	}
 	return nil
 }
 
-// MarketOrdersToMap returns a map of all market orders for each systemID listed.
-/*
-type MarketOrder struct {
-	OrderID      int64     `json:"order_id,omitempty"`
-	TypeID       int32     `json:"type_id,omitempty"`
-	TypeData     *TypeData `json:"type_data,omitempty"`
-	LocationID   int64     `json:"location_id,omitempty"`
-	VolumeTotal  int32     `json:"volume_total,omitempty"`
-	VolumeRemain int32     `json:"volume_remain,omitempty"`
-	MinVolume    int32     `json:"min_volume,omitempty"`
-	Price        float64   `json:"price,omitempty"`
-	IsBuyOrder   bool      `json:"is_buy_order,omitempty"`
-	Issued       time.Time `json:"issued,omitempty"`
-	Duration     int32     `json:"duration,omitempty"`
-	Range_       string    `json:"range,omitempty"`
+func (o *OrderDataDB) GetMarketOrdersBySystemID(systemID int32) ([]evesdk.MarketOrder, error) {
+	termQuery := bluge.NewTermQuery(strconv.Itoa(int(systemID)))
+	termQuery.SetField("system_id")
 
-	ExpiresIn time.Duration `json:"expires_in,omitempty"`
-}
-*/
-func (o *OrderDataDB) MarketOrdersToMap(systemIDs []int) error {
-	panic("not implemented")
+	request := bluge.NewTopNSearch(10, termQuery)
+	results, err := o.indexReader.Search(context.Background(), request)
+	if err != nil {
+		return nil, fmt.Errorf("error searching index: %v", err)
+	}
+
+	marketOrders := map[int64]*evesdk.MarketOrder{}
+
+	// iterate through the document matches
+	match, err := results.Next()
+	for err == nil && match != nil {
+
+		var order *evesdk.MarketOrder
+		// load the identifier for this match
+		err = match.VisitStoredFields(func(field string, value []byte) bool {
+			if field == "_id" {
+				fmt.Printf("match: %s\n", string(value))
+			}
+			return true
+		})
+		if err != nil {
+			log.Fatalf("error loading stored fields: %v", err)
+		}
+
+		marketOrders[order.OrderID] = order
+
+		// load the next document match
+		match, err = results.Next()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error iterating through results: %v", err)
+	}
+	return marketOrders, nil
 }
 
 func (o *OrderDataDB) LoadMarketOrdersFunc(region *evesdk.Region) error {
-	err := clear_db_location(o.dbpath, RegionIdKey(region.RegionID))
-	if err != nil {
-		return fmt.Errorf("error clearing db location: %v", err)
-	}
-
-	pebDbPath, err := db_location(o.dbpath, RegionIdKey(region.RegionID))
-	if err != nil {
-		return fmt.Errorf("error preping db location: %v", err)
-	}
-
-	pdb, err := pebble.Open(pebDbPath, &pebble.Options{})
-	if err != nil {
-		return fmt.Errorf("error opening: %v", err)
-	}
-	o.pdbs[RegionIdKey(region.RegionID)] = pdb
-
 	// List all market orders.
 	orders, err := o.eveSDK.ListAllMarketOrdersForRegion(context.Background(), region)
 	if err != nil {
 		fmt.Println("Error while trying to list all market orders:", err)
 	}
 
-	for _, order := range orders {
-		// Write the order details to the db.
-		order_json, err := json.Marshal(order)
-		if err != nil {
-			return fmt.Errorf("error marshalling order: %v", err)
-		}
+	for oIdx, order := range orders {
 		orderIdAsBytes := OrderIdKey(order.OrderID)
 
-		// fmt.Printf("Writing order %d to db: :%v", order.OrderID, string(order_json))
+		doc := bluge.NewDocument(orderIdAsBytes)
 
-		err = pdb.Set(orderIdAsBytes, order_json, pebble.Sync)
-		if err != nil {
-			return fmt.Errorf("error writing to db: %v", err)
+		orderValue := reflect.ValueOf(order)
+		orderType := orderValue.Type()
+		batch := bluge.NewBatch()
+
+		for i := 0; i < orderValue.NumField(); i++ {
+			fieldValue := orderValue.Field(i)
+			fieldType := orderType.Field(i)
+
+			jsonTag := fieldType.Tag.Get("json")
+			if jsonTag == "" || jsonTag == "-" {
+				continue
+			}
+
+			switch fieldValue.Kind() {
+			case reflect.Int, reflect.Int32, reflect.Int64:
+				doc.AddField(bluge.NewNumericField(jsonTag, float64(fieldValue.Int())).StoreValue())
+			case reflect.Float32, reflect.Float64:
+				doc.AddField(bluge.NewNumericField(jsonTag, fieldValue.Float()).StoreValue())
+			case reflect.Bool:
+				val := "false"
+				if fieldValue.Bool() {
+					val = "true"
+				}
+				doc.AddField(bluge.NewTextField(jsonTag, val).StoreValue())
+			case reflect.String:
+				doc.AddField(bluge.NewTextField(jsonTag, fieldValue.String()).StoreValue())
+			}
+
+			if fieldType.Type == reflect.TypeOf(time.Time{}) {
+				doc.AddField(bluge.NewDateTimeField(jsonTag, fieldValue.Interface().(time.Time)).StoreValue())
+			}
+		}
+
+		batch.Update(doc.ID(), doc)
+		if oIdx%1000 == 0 {
+			err = o.indexWriter.Batch(batch)
+			if err != nil {
+				return fmt.Errorf("error writing to index: %v", err)
+			}
+			batch = bluge.NewBatch()
 		}
 	}
 
-	fmt.Printf("Wrote %d orders to db for region %d\n", len(orders), region.RegionID)
+	fmt.Printf("Wrote %d orders to index for region %d\n", len(orders), region.RegionID)
 
 	return nil
 }
 
-func OrderIdKey(orderId int64) []byte {
-	return []byte(strconv.Itoa(int(orderId)))
+func OrderIdKey(orderId int64) string {
+	return strconv.Itoa(int(orderId))
 }
 
 func RegionIdKey(regionId int32) string {
 	return strconv.Itoa(int(regionId))
-}
-
-func clear_db_location(baseDir, region string) error {
-	dbpath := filepath.Join(baseDir, fmt.Sprintf("evemarket_orders_region_%s_peb_db", region))
-
-	err := os.RemoveAll(dbpath)
-	if err != nil {
-		return fmt.Errorf("could not remove directory %s: %w", dbpath, err)
-	}
-
-	return nil
-}
-
-func db_location(baseDir, region string) (string, error) {
-	dbpath := filepath.Join(baseDir, fmt.Sprintf("evemarket_orders_region_%s_peb_db", region))
-
-	_, err := os.Stat(dbpath)
-	if os.IsNotExist(err) {
-		err := os.Mkdir(dbpath, 0700)
-		if err != nil {
-			return "", fmt.Errorf("could not create directory %s: %w", dbpath, err)
-		}
-	} else if err != nil {
-		return "", fmt.Errorf("could not stat directory %s: %w", dbpath, err)
-	}
-
-	return dbpath, nil
 }
