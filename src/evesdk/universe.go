@@ -12,7 +12,10 @@ type Regions struct {
 	Set map[string]*Region `json:"regions,omitempty"`
 }
 
-func (e *eveland) ListAllRegions(ctx context.Context) (*Regions, error) {
+func (e *EveLand) ListAllRegions(ctx context.Context) (*Regions, error) {
+	if e == nil {
+		return nil, ErrNilEveLand
+	}
 	regionsIDs, _, err := e.Eve.ESI.UniverseApi.GetUniverseRegions(ctx, nil)
 	if err != nil {
 		return nil, err

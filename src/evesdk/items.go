@@ -9,7 +9,7 @@ import (
 )
 
 // ListAllTypeIDs returns all types in the game, as an array of TypeIDs.
-func (e *eveland) ListAllTypeIDs(ctx context.Context) ([]int32, error) {
+func (e *EveLand) ListAllTypeIDs(ctx context.Context) ([]int32, error) {
 	types, resp, err := e.Eve.ESI.UniverseApi.GetUniverseTypes(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ type TypeData struct {
 
 // GetTypeData returns the type data for a given typeID.
 // Use the GetUniverseTypesTypeId endpoint to get the name of a typeID.
-func (e *eveland) GetTypeData(ctx context.Context, typeID int32) (*TypeData, error) {
+func (e *EveLand) GetTypeData(ctx context.Context, typeID int32) (*TypeData, error) {
 	typeData, _, err := e.Eve.ESI.UniverseApi.GetUniverseTypesTypeId(ctx, typeID, nil)
 	if err != nil {
 		return nil, err

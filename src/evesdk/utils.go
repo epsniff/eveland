@@ -14,6 +14,7 @@ func getPages(r *http.Response) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
+
 	pages := int32(pagesInt)
 	return pages, err
 }
