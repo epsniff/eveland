@@ -4,80 +4,142 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"reflect"
+	"os"
+	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/blugelabs/bluge"
 	"github.com/epsniff/eveland/src/evesdk"
 )
 
-type OrderDataDB struct {
-	indexWriter *bluge.Writer
-	indexReader *bluge.Reader
-	eveSDK      *evesdk.EveLand
-
-	dbpath string
+type EveLand interface {
+	ListAllMarketOrdersForRegion(ctx context.Context, region *evesdk.Region) ([]*evesdk.MarketOrder, error)
 }
 
-func New(eveSDK *evesdk.EveLand, dbpath string) (*OrderDataDB, error) {
+type OrderDataDB struct {
+	eveSDK EveLand
+
+	dbpath      string
+	blugeConfig bluge.Config
+	index       *bluge.Writer
+}
+
+func New(eveSDK EveLand, dbpath string) (*OrderDataDB, error) {
 	odb := &OrderDataDB{
 		eveSDK: eveSDK,
 	}
 
-	odb.dbpath = dbpath
+	// Create the database directory if it doesn't exist
+	dbdir, err := db_location(dbpath)
+	if err != nil {
+		return nil, fmt.Errorf("error getting/creating bluge database directory: %v", err)
+	}
+
+	odb.dbpath = dbdir
 	config := bluge.DefaultConfig(odb.dbpath)
+	odb.blugeConfig = config
 
 	w, err := bluge.OpenWriter(config)
 	if err != nil {
-		return nil, fmt.Errorf("error opening Bluge index: %v", err)
+		return nil, fmt.Errorf("error opening bluge index: %v", err)
 	}
-	odb.indexWriter = w
-
-	r, err := w.Reader()
-	if err != nil {
-		return nil, fmt.Errorf("error opening Bluge index reader: %v", err)
-	}
-	odb.indexReader = r
+	odb.index = w
 
 	return odb, nil
 
 }
 
-// CloseDB closes the open database.
-func (o *OrderDataDB) CloseDB() error {
-	err := o.indexWriter.Close()
+// Close closes the open database.
+func (o *OrderDataDB) Close() error {
+	err := o.index.Close()
 	if err != nil {
 		return fmt.Errorf("error closing Bluge index writer: %v", err)
 	}
-	err = o.indexReader.Close()
-	if err != nil {
-		return fmt.Errorf("error closing Bluge index reader: %v", err)
-	}
+
 	return nil
 }
 
-func (o *OrderDataDB) GetMarketOrdersBySystemID(systemID int32) ([]evesdk.MarketOrder, error) {
-	termQuery := bluge.NewTermQuery(strconv.Itoa(int(systemID)))
-	termQuery.SetField("system_id")
-
-	request := bluge.NewTopNSearch(10, termQuery)
-	results, err := o.indexReader.Search(context.Background(), request)
-	if err != nil {
-		return nil, fmt.Errorf("error searching index: %v", err)
+func (o *OrderDataDB) GetMarketOrdersBySystemID(systemID int32) (buyOrders map[int32]*MinHeap, sellOrders map[int32]*MaxHeap, err error) {
+	if o == nil {
+		return nil, nil, fmt.Errorf("OrderDataDB is nil")
 	}
 
-	marketOrders := map[int64]*evesdk.MarketOrder{}
+	reader, err := o.index.Reader()
+	if err != nil {
+		return nil, nil, fmt.Errorf("error opening Bluge index reader: %v", err)
+	}
+
+	defer func() {
+		err = reader.Close()
+		if err != nil {
+			err = fmt.Errorf("error closing Bluge index reader: %v", err)
+		}
+	}()
+
+	query := bluge.
+		NewNumericRangeQuery(float64(systemID), float64(systemID+1)).
+		// NewNumericRangeQuery(0, 1000000000000000000).
+		SetField("system_id")
+	request := bluge.NewAllMatches(query).WithStandardAggregations()
+
+	// request := bluge.NewAllMatches(bluge.NewMatchAllQuery()).WithStandardAggregations()
+
+	results, err := reader.Search(context.Background(), request)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error searching index: %v", err)
+	}
+
+	buyOrders = map[int32]*MinHeap{}
+	sellOrders = map[int32]*MaxHeap{}
 
 	// iterate through the document matches
 	match, err := results.Next()
+	i := 0
 	for err == nil && match != nil {
+		fmt.Printf("Found %v matches, err: %v, match: %v", i, err, match)
 
-		var order *evesdk.MarketOrder
+		var order *evesdk.MarketOrder = &evesdk.MarketOrder{}
 		// load the identifier for this match
-		err = match.VisitStoredFields(func(field string, value []byte) bool {
-			if field == "_id" {
-				fmt.Printf("match: %s\n", string(value))
+		err = match.VisitStoredFields(func(field string, bv []byte) bool {
+			value := make([]byte, len(bv))
+			copy(value, bv)
+
+			switch field {
+			case "_id":
+			case "system_id":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.SystemID = int32(tmp)
+			case "order_id":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.OrderID = int64(tmp)
+			case "type_id":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.TypeID = int32(tmp)
+			case "location_id":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.LocationID = int64(tmp)
+			case "volume_total":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.VolumeTotal = int32(tmp)
+			case "volume_remain":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.VolumeRemain = int32(tmp)
+			case "min_volume":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.MinVolume = int32(tmp)
+			case "price":
+				order.Price, _ = bluge.DecodeNumericFloat64(value)
+			case "is_buy_order":
+				order.IsBuyOrder, _ = strconv.ParseBool(string(value))
+			case "issued":
+				order.Issued, _ = bluge.DecodeDateTime(value)
+			case "duration":
+				tmp, _ := bluge.DecodeNumericFloat64(value)
+				order.Duration = int32(tmp)
+			case "range":
+				order.Range_ = string(value)
+			default:
+				fmt.Printf("Unknown field: %v\n", field)
 			}
 			return true
 		})
@@ -85,75 +147,86 @@ func (o *OrderDataDB) GetMarketOrdersBySystemID(systemID int32) ([]evesdk.Market
 			log.Fatalf("error loading stored fields: %v", err)
 		}
 
-		marketOrders[order.OrderID] = order
+		if order.IsBuyOrder {
+			bos, ok := buyOrders[order.TypeID]
+			if !ok {
+				bos = NewMinHeap()
+				buyOrders[order.TypeID] = bos
+			}
+			bos.Push(order)
+		} else {
+			sos, ok := sellOrders[order.TypeID]
+			if !ok {
+				sos = NewMaxHeap()
+				sellOrders[order.TypeID] = sos
+			}
+			sos.Push(order)
+		}
 
 		// load the next document match
 		match, err = results.Next()
+		i = i + 1
 	}
 	if err != nil {
-		return nil, fmt.Errorf("error iterating through results: %v", err)
+		return nil, nil, fmt.Errorf("error iterating through results: %v", err)
 	}
-	return marketOrders, nil
+	return buyOrders, sellOrders, nil
 }
 
-func (o *OrderDataDB) LoadMarketOrdersFunc(region *evesdk.Region) error {
+func (o *OrderDataDB) LoadMarketOrders(ctx context.Context, region *evesdk.Region) (found int, err error) {
 	// List all market orders.
+	if o == nil {
+		return 0, fmt.Errorf("OrderDataDB is nil")
+	}
+	if o.eveSDK == nil {
+		return 0, fmt.Errorf("eveSDK is nil")
+	}
 	orders, err := o.eveSDK.ListAllMarketOrdersForRegion(context.Background(), region)
 	if err != nil {
-		fmt.Println("Error while trying to list all market orders:", err)
+		return 0, fmt.Errorf("error while trying to list all market orders: %v", err)
 	}
 
-	for oIdx, order := range orders {
+	batch := bluge.NewBatch()
+	count := 0
+	for i, order := range orders {
 		orderIdAsBytes := OrderIdKey(order.OrderID)
 
-		doc := bluge.NewDocument(orderIdAsBytes)
-
-		orderValue := reflect.ValueOf(order)
-		orderType := orderValue.Type()
-		batch := bluge.NewBatch()
-
-		for i := 0; i < orderValue.NumField(); i++ {
-			fieldValue := orderValue.Field(i)
-			fieldType := orderType.Field(i)
-
-			jsonTag := fieldType.Tag.Get("json")
-			if jsonTag == "" || jsonTag == "-" {
-				continue
-			}
-
-			switch fieldValue.Kind() {
-			case reflect.Int, reflect.Int32, reflect.Int64:
-				doc.AddField(bluge.NewNumericField(jsonTag, float64(fieldValue.Int())).StoreValue())
-			case reflect.Float32, reflect.Float64:
-				doc.AddField(bluge.NewNumericField(jsonTag, fieldValue.Float()).StoreValue())
-			case reflect.Bool:
-				val := "false"
-				if fieldValue.Bool() {
-					val = "true"
-				}
-				doc.AddField(bluge.NewTextField(jsonTag, val).StoreValue())
-			case reflect.String:
-				doc.AddField(bluge.NewTextField(jsonTag, fieldValue.String()).StoreValue())
-			}
-
-			if fieldType.Type == reflect.TypeOf(time.Time{}) {
-				doc.AddField(bluge.NewDateTimeField(jsonTag, fieldValue.Interface().(time.Time)).StoreValue())
-			}
+		//doc := bluge.NewDocument(orderIdAsBytes)
+		isBuyOrder := "false"
+		if order.IsBuyOrder {
+			isBuyOrder = "true"
 		}
+		doc := bluge.NewDocument(orderIdAsBytes).
+			AddField(bluge.NewNumericField("order_id", float64(order.OrderID)).StoreValue()).
+			AddField(bluge.NewNumericField("type_id", float64(order.TypeID)).StoreValue()).
+			AddField(bluge.NewNumericField("location_id", float64(order.LocationID)).StoreValue()).
+			AddField(bluge.NewNumericField("system_id", float64(order.SystemID)).StoreValue()).
+			AddField(bluge.NewNumericField("volume_total", float64(order.VolumeTotal)).StoreValue()).
+			AddField(bluge.NewNumericField("volume_remain", float64(order.VolumeRemain)).StoreValue()).
+			AddField(bluge.NewNumericField("min_volume", float64(order.MinVolume)).StoreValue()).
+			AddField(bluge.NewNumericField("price", order.Price).StoreValue()).
+			AddField(bluge.NewTextField("is_buy_order", isBuyOrder).StoreValue()).
+			AddField(bluge.NewDateTimeField("issued", order.Issued).StoreValue()).
+			AddField(bluge.NewNumericField("duration", float64(order.Duration)).StoreValue()).
+			AddField(bluge.NewTextField("range", order.Range_).StoreValue())
 
 		batch.Update(doc.ID(), doc)
-		if oIdx%1000 == 0 {
-			err = o.indexWriter.Batch(batch)
+		if i%100 == 0 {
+			err = o.index.Batch(batch)
 			if err != nil {
-				return fmt.Errorf("error writing to index: %v", err)
+				return 0, fmt.Errorf("error writing to index: %v", err)
 			}
-			batch = bluge.NewBatch()
+			batch.Reset()
 		}
+		count = count + 1
 	}
 
-	fmt.Printf("Wrote %d orders to index for region %d\n", len(orders), region.RegionID)
+	err = o.index.Batch(batch)
+	if err != nil {
+		return 0, fmt.Errorf("error writing to index: %v", err)
+	}
 
-	return nil
+	return count, nil
 }
 
 func OrderIdKey(orderId int64) string {
@@ -162,4 +235,20 @@ func OrderIdKey(orderId int64) string {
 
 func RegionIdKey(regionId int32) string {
 	return strconv.Itoa(int(regionId))
+}
+
+func db_location(baseDir string) (string, error) {
+	dbpath := filepath.Join(baseDir, "orders_bluge_db")
+
+	_, err := os.Stat(dbpath)
+	if os.IsNotExist(err) {
+		err := os.Mkdir(dbpath, 0700)
+		if err != nil {
+			return "", fmt.Errorf("could not create directory %s: %w", dbpath, err)
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("could not stat directory %s: %w", dbpath, err)
+	}
+
+	return dbpath, nil
 }

@@ -92,6 +92,10 @@ func (c *EveCache) Delete(key string) {
 
 // Close closes the cache and flushes any pending writes to disk
 func (c *EveCache) Close() error {
+	if c == nil {
+		return nil
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

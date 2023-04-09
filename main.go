@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -39,8 +40,23 @@ func Init(eveSDK *evesdk.EveLand, dbpath string) {
 		Use:   "loadregions",
 		Short: "loadregions",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := dbregions.LoadRegionsFunc(eveSDK, dbpath); err != nil {
+			dbr, err := dbregions.New(eveSDK, dbpath)
+			if err != nil {
+				fmt.Println("error creating db regions: ", err)
+				return
+			}
+			if err := dbr.LoadRegions(context.Background()); err != nil {
 				fmt.Println("error: ", err)
+			}
+
+			// print all regions.
+			regions, err := dbr.ListAllRegions(context.Background())
+			if err != nil {
+				fmt.Println("error listing regions: ", err)
+				return
+			}
+			for _, region := range regions {
+				fmt.Printf("Region: name: %s, id: %d\n", region.Name, region.RegionID)
 			}
 		},
 	}
@@ -50,25 +66,39 @@ func Init(eveSDK *evesdk.EveLand, dbpath string) {
 		Use:   "loadmarketorders",
 		Short: "loadmarketorders",
 		Run: func(cmd *cobra.Command, args []string) {
+			dbm, err := dbmarketorders.New(eveSDK, dbpath)
+			if err != nil {
+				fmt.Println("error creating db marketorders: ", err)
+				return
+			}
+
 			// TODO - make this a flag and lookup the region id from the db.
 			reg_verge_vendor := &evesdk.Region{
 				RegionID: 10000068,
 				Name:     "Verge Vendor",
 			}
-			if err := dbmarketorders.LoadMarketOrdersFunc(eveSDK, dbpath, reg_verge_vendor); err != nil {
-				fmt.Println("error: ", err)
+
+			if cnt, err := dbm.LoadMarketOrders(context.TODO(), reg_verge_vendor); err != nil {
+				fmt.Printf("error loading market orders for region %s: %v", reg_verge_vendor.Name, err)
+				return
+			} else {
+				fmt.Printf("Loaded %d market orders for region %s \n", cnt, reg_verge_vendor.Name)
 			}
 
 			reg_sinq_laison := &evesdk.Region{
 				RegionID: 10000032,
 				Name:     "Sinq Laison",
 			}
-			if err := dbmarketorders.LoadMarketOrdersFunc(eveSDK, dbpath, reg_sinq_laison); err != nil {
-				fmt.Println("error: ", err)
+			if cnt, err := dbm.LoadMarketOrders(context.TODO(), reg_sinq_laison); err != nil {
+				fmt.Printf("error loading market orders for region %s: %v", reg_sinq_laison.Name, err)
+				return
+			} else {
+				fmt.Printf("Loaded %d market orders for region %s \n", cnt, reg_sinq_laison.Name)
 			}
 
-			if err := dbmarketorders.CloseDB(); err != nil {
+			if err := dbm.Close(); err != nil {
 				fmt.Println("error: ", err)
+				return
 			}
 		},
 	}
@@ -168,8 +198,16 @@ func Init(eveSDK *evesdk.EveLand, dbpath string) {
 }
 
 func main() {
+
+	storagePath := os.Getenv("GOPATH") + "/src/github.com/epsniff/eveland/_data"
+	fmt.Printf("using the following path for database files: %v\n", storagePath)
+	if err := os.MkdirAll(storagePath, 0755); err != nil {
+		fmt.Println("error: ", err)
+		return
+	}
+
 	// Create our HTTP Client with a http a cache transport.
-	c, err := evecache.New(os.Getenv("GOPATH") + "/src/github.com/epsniff/eveland/_data")
+	c, err := evecache.New(storagePath)
 	if err != nil {
 		fmt.Println(err)
 	}
