@@ -3,7 +3,6 @@ package evesdk
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,8 +11,10 @@ import (
 )
 
 type MarketOrder struct {
-	OrderID      int64     `json:"order_id,omitempty"`
-	TypeID       int32     `json:"type_id,omitempty"`
+	OrderID int64 `json:"order_id,omitempty"`
+	TypeID  int32 `json:"type_id,omitempty"`
+	// TypeData will be nil and needs to be fetched separately, use the TypeID to fetch it.
+	// it's here to make it easier to assoiattes the order with the type.
 	TypeData     *TypeData `json:"type_data,omitempty"`
 	LocationID   int64     `json:"location_id,omitempty"`
 	SystemID     int32     `json:"system_id,omitempty"`
@@ -63,8 +64,6 @@ func (e *EveLand) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 	marketMu := &sync.RWMutex{}
 	marketOrders := []*MarketOrder{}
 
-	typeDataCache := make(map[int32]*TypeData)
-
 	addOrders := func(orders []esi.GetMarketsRegionIdOrders200Ok) {
 		for _, order := range orders {
 			m := &MarketOrder{
@@ -82,26 +81,6 @@ func (e *EveLand) ListAllMarketOrdersForRegion(ctx context.Context, region *Regi
 				Range_:       order.Range_,
 				ExpiresIn:    timeUntilCacheExpires(resp),
 			}
-
-			marketMu.RLock()
-			typeData, ok := typeDataCache[m.TypeID]
-			marketMu.RUnlock()
-
-			if !ok {
-				marketMu.Lock()
-				// Check again in case another goroutine already got it.
-				typeData, ok = typeDataCache[m.TypeID]
-				if !ok {
-					typeData, err = e.GetTypeData(ctx, m.TypeID)
-					if err != nil {
-						fmt.Println("GetType failed:", err)
-					} else {
-						typeDataCache[m.TypeID] = typeData
-					}
-				}
-				marketMu.Unlock()
-			}
-			m.TypeData = typeData
 
 			marketMu.Lock()
 			marketOrders = append(marketOrders, m)

@@ -1,42 +1,33 @@
-package dbsdeutils
+package evesdedb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"os"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
-const DBNAME = "eve_sde.sqlite"
-
-func LoadDB(basepath string) (*sql.DB, error) {
-	var sqliteFile = basepath + "/" + DBNAME
-	// error if database file does not exist
-	if _, err := os.Stat(sqliteFile); os.IsNotExist(err) {
-		// go download the latest SDE sqllite database from https://www.fuzzwork.co.uk/dump/
-		// and put it in the basepath:
-		//   $ curl -O https://www.fuzzwork.co.uk/dump/sqlite-latest.sqlite.bz2
-		//   $ bunzip2 sqlite-latest.sqlite.bz2
-		//   $ mv sqlite-latest.sqlite _data/eve_sde.sqlite
-		return nil, fmt.Errorf("SDE database file does not exist: %s", sqliteFile)
-	}
-	db, err := sql.Open("sqlite3", sqliteFile)
+func (e *EveSDEDB) ShowAllTables(ctx context.Context) error {
+	rows, err := e.evesde.Query("SELECT name FROM sqlite_master WHERE type='table'")
 	if err != nil {
-		return nil, fmt.Errorf("error opening database: %v", err)
+		return fmt.Errorf("error querying tables: %v", err)
 	}
-	return db, nil
+	defer rows.Close()
+
+	fmt.Println("Tables:")
+	for rows.Next() {
+		var tableName string
+		err = rows.Scan(&tableName)
+		if err != nil {
+			return fmt.Errorf("error scanning table name: %v", err)
+		}
+		fmt.Println(tableName)
+	}
+
+	return nil
 }
 
-func ShowAllColumns(basepath string, tableName string) error {
-
-	db, err := LoadDB(basepath)
-	if err != nil {
-		return fmt.Errorf("error opening database: %v", err)
-	}
-	defer db.Close()
-
-	err = listTableColumns(db, tableName)
+func (e *EveSDEDB) ShowAllColumns(ctx context.Context, tableName string) error {
+	err := listTableColumns(e.evesde, tableName)
 	if err != nil {
 		return fmt.Errorf("error listing table columns: %v", err)
 	}
@@ -104,32 +95,6 @@ func listTableColumns(db *sql.DB, tableName string) error {
 			fmt.Printf("%s: %v ", colNames[i], *value.(*interface{}))
 		}
 		fmt.Println()
-	}
-
-	return nil
-}
-
-func ShowAllTables(basepath string) error {
-	db, err := LoadDB(basepath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
-	if err != nil {
-		return fmt.Errorf("error querying tables: %v", err)
-	}
-	defer rows.Close()
-
-	fmt.Println("Tables:")
-	for rows.Next() {
-		var tableName string
-		err = rows.Scan(&tableName)
-		if err != nil {
-			return fmt.Errorf("error scanning table name: %v", err)
-		}
-		fmt.Println(tableName)
 	}
 
 	return nil

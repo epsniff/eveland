@@ -1,27 +1,19 @@
-package dbjumpcal
+package evesdedb
 
 import (
 	"container/list"
 	"database/sql"
 	"fmt"
-
-	"github.com/epsniff/eveland/src/dbsdeutils"
 )
 
-func GetSystemID(systemName, dbpath string) (int, error) {
-	// Open the SDE SQLite database
-	db, err := dbsdeutils.LoadDB(dbpath)
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
+func (e *EveSDEDB) GetSystemID(systemName string) (int, error) {
 
 	// Prepare an SQL query to retrieve the systemID for the given systemName
 	// SAMPLE
 	/*
 		regionID: 10000001 constellationID: 20000001 solarSystemID: 30000002 solarSystemName: Lashesih x: -1.0330096826312646e+17 y: 4.1707503568269944e+16 z: -2.985630412979509e+16 xMin: -1.0330156508982766e+17 xMax: -1.0329952828984021e+17 yMin: 4.1707467566727784e+16 yMax: 4.170759041342664e+16 zMin: 2.985617328250696e+16 zMax: 2.9856912011988012e+16 luminosity: 0.01282 border: true fringe: false corridor: true hub: false international: true regional: true constellation: <nil> security: 0.7516891466979871 factionID: 500007 radius: 1.018399993728e+12 sunTypeID: 45037 securityClass: B
 	*/
-	stmt, err := db.Prepare("SELECT solarSystemID FROM mapSolarSystems WHERE solarSystemName = ?")
+	stmt, err := e.evesde.Prepare("SELECT solarSystemID FROM mapSolarSystems WHERE solarSystemName = ?")
 	if err != nil {
 		return 0, err
 	}
@@ -38,14 +30,9 @@ func GetSystemID(systemName, dbpath string) (int, error) {
 	return systemID, nil
 }
 
-func SystemsWithinNJumps(startSystemId, nJumps int, dbpath string) (SystemGraph, error) {
-	db, err := dbsdeutils.LoadDB(dbpath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
+func (e *EveSDEDB) SystemsWithinNJumps(startSystemId, nJumps int) (SystemGraph, error) {
 
-	res, err := search(db, int(startSystemId), nJumps)
+	res, err := search(e.evesde, int(startSystemId), nJumps)
 	if err != nil {
 		return nil, err
 	}

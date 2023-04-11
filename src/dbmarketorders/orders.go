@@ -59,7 +59,7 @@ func (o *OrderDataDB) Close() error {
 	return nil
 }
 
-func (o *OrderDataDB) GetMarketOrdersBySystemID(systemID int32) (buyOrders map[int32]*MinHeap, sellOrders map[int32]*MaxHeap, err error) {
+func (o *OrderDataDB) GetMarketOrdersBySystemID(ctx context.Context, systemID int32) (buyOrders map[int32]*MinHeap, sellOrders map[int32]*MaxHeap, err error) {
 	if o == nil {
 		return nil, nil, fmt.Errorf("OrderDataDB is nil")
 	}
@@ -96,7 +96,7 @@ func (o *OrderDataDB) GetMarketOrdersBySystemID(systemID int32) (buyOrders map[i
 	match, err := results.Next()
 	i := 0
 	for err == nil && match != nil {
-		fmt.Printf("Found %v matches, err: %v, match: %v", i, err, match)
+		// fmt.Printf("Found %v matches, err: %v, match: %v", i, err, match)
 
 		var order *evesdk.MarketOrder = &evesdk.MarketOrder{}
 		// load the identifier for this match
@@ -181,7 +181,7 @@ func (o *OrderDataDB) LoadMarketOrders(ctx context.Context, region *evesdk.Regio
 	if o.eveSDK == nil {
 		return 0, fmt.Errorf("eveSDK is nil")
 	}
-	orders, err := o.eveSDK.ListAllMarketOrdersForRegion(context.Background(), region)
+	orders, err := o.eveSDK.ListAllMarketOrdersForRegion(ctx, region)
 	if err != nil {
 		return 0, fmt.Errorf("error while trying to list all market orders: %v", err)
 	}
