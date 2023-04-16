@@ -24,6 +24,19 @@ type OrderDataDB struct {
 	index       *bluge.Writer
 }
 
+func RemoveDB(dbpath string) error {
+	dbdir, err := db_location(dbpath)
+	if err != nil {
+		return fmt.Errorf("error getting/creating bluge database directory: %v", err)
+	}
+	// remove the database directory
+	err = os.RemoveAll(dbdir)
+	if err != nil {
+		return fmt.Errorf("error removing bluge database directory: %v", err)
+	}
+	return nil
+}
+
 func New(eveSDK EveLand, dbpath string) (*OrderDataDB, error) {
 	odb := &OrderDataDB{
 		eveSDK: eveSDK,
@@ -46,7 +59,6 @@ func New(eveSDK EveLand, dbpath string) (*OrderDataDB, error) {
 	odb.index = w
 
 	return odb, nil
-
 }
 
 // Close closes the open database.
@@ -59,7 +71,16 @@ func (o *OrderDataDB) Close() error {
 	return nil
 }
 
-func (o *OrderDataDB) GetMarketOrdersBySystemID(ctx context.Context, systemID int32) (buyOrders map[int32]*MinHeap, sellOrders map[int32]*MaxHeap, err error) {
+// GetMarketOrdersBySystemID returns a map of buy orders and a map of sell orders for a given system ID.
+// The map keys are the type IDs of the items being sold/bought.
+// The map values are MinHeaps and MaxHeaps of the orders for that type ID.
+//
+// The MinHeap and MaxHeap are sorted by price.
+// The SellOrders/MinHeap is sorted in ascending order, so the lowest price is at the top.
+// The BuyOrders/MaxHeap is sorted in descending order, so the highest price is at the top.
+func (o *OrderDataDB) GetMarketOrdersBySystemID(ctx context.Context, systemID int32) (
+	buyOrders map[int32]*MaxHeap, sellOrders map[int32]*MinHeap, err error) {
+
 	if o == nil {
 		return nil, nil, fmt.Errorf("OrderDataDB is nil")
 	}
@@ -89,8 +110,8 @@ func (o *OrderDataDB) GetMarketOrdersBySystemID(ctx context.Context, systemID in
 		return nil, nil, fmt.Errorf("error searching index: %v", err)
 	}
 
-	buyOrders = map[int32]*MinHeap{}
-	sellOrders = map[int32]*MaxHeap{}
+	buyOrders = map[int32]*MaxHeap{}
+	sellOrders = map[int32]*MinHeap{}
 
 	// iterate through the document matches
 	match, err := results.Next()
@@ -150,14 +171,14 @@ func (o *OrderDataDB) GetMarketOrdersBySystemID(ctx context.Context, systemID in
 		if order.IsBuyOrder {
 			bos, ok := buyOrders[order.TypeID]
 			if !ok {
-				bos = NewMinHeap()
+				bos = NewMaxHeap()
 				buyOrders[order.TypeID] = bos
 			}
 			bos.Push(order)
 		} else {
 			sos, ok := sellOrders[order.TypeID]
 			if !ok {
-				sos = NewMaxHeap()
+				sos = NewMinHeap()
 				sellOrders[order.TypeID] = sos
 			}
 			sos.Push(order)

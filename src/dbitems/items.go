@@ -40,7 +40,7 @@ func New(eveSDK EveLand, dbpath string) (*ItemDataDB, error) {
 		return nil, fmt.Errorf("error opening: %v", err)
 	}
 
-	return &ItemDataDB{eveSDK: eveSDK, pdb: pdb}, nil
+	return &ItemDataDB{eveSDK: eveSDK, pdb: pdb, typeCache: make(map[int32]*evesdk.TypeData)}, nil
 }
 
 func (r *ItemDataDB) Close() error {

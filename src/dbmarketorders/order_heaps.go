@@ -6,6 +6,9 @@ import (
 	"github.com/epsniff/eveland/src/evesdk"
 )
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// MinHeap
+
 type MinHeap []*evesdk.MarketOrder
 
 func (h MinHeap) Len() int           { return len(h) }
@@ -24,11 +27,31 @@ func (h *MinHeap) Pop() interface{} {
 	return x
 }
 
+func (h *MinHeap) Peek() *evesdk.MarketOrder {
+	if len(*h) == 0 {
+		return nil
+	}
+	return (*h)[0]
+}
+
+func (h *MinHeap) Merge(other *MinHeap) {
+	for _, order := range *other {
+		heap.Push(h, order)
+	}
+}
+
+func (h *MinHeap) Cnt() int {
+	return len(*h)
+}
+
 func NewMinHeap() *MinHeap {
 	h := &MinHeap{}
 	heap.Init(h)
 	return h
 }
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// MaxHeap
 
 type MaxHeap []*evesdk.MarketOrder
 
@@ -46,6 +69,23 @@ func (h *MaxHeap) Pop() interface{} {
 	x := old[n-1]
 	*h = old[0 : n-1]
 	return x
+}
+
+func (h *MaxHeap) Peek() *evesdk.MarketOrder {
+	if len(*h) == 0 {
+		return nil
+	}
+	return (*h)[0]
+}
+
+func (h *MaxHeap) Merge(other *MaxHeap) {
+	for _, order := range *other {
+		heap.Push(h, order)
+	}
+}
+
+func (h *MaxHeap) Cnt() int {
+	return len(*h)
 }
 
 func NewMaxHeap() *MaxHeap {
