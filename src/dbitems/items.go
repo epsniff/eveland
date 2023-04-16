@@ -2,6 +2,7 @@ package dbitems
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,25 +14,76 @@ import (
 	"github.com/epsniff/eveland/src/evesdk"
 )
 
-func LoadItemsFunc(eveSDK *evesdk.EveLand, dbpath string) error {
+type EveLand interface {
+	ListAllTypeIDs(ctx context.Context) ([]int32, error)
+	GetTypeData(ctx context.Context, typeID int32) (*evesdk.TypeData, error)
+}
 
+type ItemDataDB struct {
+	eveSDK EveLand
+
+	mu        sync.RWMutex
+	typeCache map[int32]*evesdk.TypeData
+
+	pdb *pebble.DB
+}
+
+func New(eveSDK EveLand, dbpath string) (*ItemDataDB, error) {
 	pebDbPath, err := db_location(dbpath)
 	if err != nil {
-		return fmt.Errorf("error preping db location: %v", err)
+		return nil, fmt.Errorf("error preping db location: %v", err)
 	}
 	fmt.Println("Storing item data on disk in pebbledb at: ", pebDbPath)
+
 	pdb, err := pebble.Open(pebDbPath, &pebble.Options{})
 	if err != nil {
-		return fmt.Errorf("error opening: %v", err)
+		return nil, fmt.Errorf("error opening: %v", err)
 	}
-	defer func() {
-		err := pdb.Close()
-		if err != nil {
-			fmt.Printf("Error closing db: %v  err: %v \n ", pebDbPath, err)
-		}
-	}()
 
-	types, err := eveSDK.ListAllTypeIDs(context.Background())
+	return &ItemDataDB{eveSDK: eveSDK, pdb: pdb, typeCache: make(map[int32]*evesdk.TypeData)}, nil
+}
+
+func (r *ItemDataDB) Close() error {
+	err := r.pdb.Close()
+	if err != nil {
+		return fmt.Errorf("error closing: %v", err)
+	}
+	return nil
+}
+
+func (r *ItemDataDB) GetItem(ctx context.Context, id int32) (*evesdk.TypeData, error) {
+	// Check the cache first.
+	r.mu.RLock()
+	if td, ok := r.typeCache[id]; ok {
+		r.mu.RUnlock()
+		return td, nil
+	}
+	r.mu.RUnlock()
+
+	key := TypeIDKey(id)
+	data, closer, err := r.pdb.Get([]byte(key))
+	if err != nil {
+		return nil, fmt.Errorf("error while trying to read from db: err: %v", err)
+	}
+	defer closer.Close()
+
+	// Unmarshal the data.
+	var td *evesdk.TypeData
+	err = json.Unmarshal(data, &td)
+	if err != nil {
+		return nil, fmt.Errorf("error while trying to unmarshal data: err: %v", err)
+	}
+
+	// Add the item to the cache.
+	r.mu.Lock()
+	r.typeCache[id] = td
+	r.mu.Unlock()
+
+	return td, nil
+}
+
+func (r *ItemDataDB) LoadItems(ctx context.Context) error {
+	types, err := r.eveSDK.ListAllTypeIDs(context.Background())
 	if err != nil {
 		fmt.Println("Error while trying to list all type ids:", err)
 	}
@@ -52,7 +104,7 @@ func LoadItemsFunc(eveSDK *evesdk.EveLand, dbpath string) error {
 			}()
 			try := 0
 		retry:
-			td, err := eveSDK.GetTypeData(context.Background(), typeId)
+			td, err := r.eveSDK.GetTypeData(context.Background(), typeId)
 			if err != nil {
 				err := fmt.Errorf("error while trying to get type data: %v", err)
 				fmt.Printf("Error: try: %v, type: %v, err: %v\n", try, typeId, err)
@@ -69,18 +121,24 @@ func LoadItemsFunc(eveSDK *evesdk.EveLand, dbpath string) error {
 				fmt.Printf("Processed %d types.\n", i)
 			}
 		}(i, t)
+		time.Sleep(10 * time.Millisecond)
 	}
 	wg.Wait() // Wait for all goroutines to finish.
 	fmt.Printf("Number of type data: %v\n", len(typeDataList))
 
 	for _, td := range typeDataList {
-		err := pdb.Set(TypeIDKey(td.TypeId), []byte(td.Name), pebble.Sync)
+		// marshal the data as json
+		data, err := json.Marshal(td)
 		if err != nil {
-			return fmt.Errorf("error while trying to write to db: %v, err: %v", pebDbPath, err)
+			return fmt.Errorf("error while trying to marshal type data: %v", err)
+		}
+		err = r.pdb.Set(TypeIDKey(td.TypeId), data, pebble.Sync)
+		if err != nil {
+			return fmt.Errorf("error while trying to write to db: err: %v", err)
 		}
 	}
 
-	fmt.Printf("Done writing to db: %v, number of types: %v\n", pebDbPath, len(typeDataList))
+	fmt.Printf("Done writing to type database, number of types: %v\n", len(typeDataList))
 
 	return nil
 }

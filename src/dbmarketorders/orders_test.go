@@ -65,7 +65,7 @@ func TestLoadMarketOrders(t *testing.T) {
 	assert.Equal(t, 8, cnt)
 
 	// Check if the data was loaded correctly
-	bos, sos, err := dbm.GetMarketOrdersBySystemID(30000142)
+	bos, sos, err := dbm.GetMarketOrdersBySystemID(context.TODO(), 30000142)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(bos))
 	assert.Equal(t, 1, len(sos))

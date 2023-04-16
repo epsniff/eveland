@@ -13,12 +13,14 @@ import (
 func New(cachDir string) (*EveCache, error) {
 	pebDbPath, err := db_location(cachDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error preping db location: %v", err)
 	}
 	fmt.Println("Storing http cache on disk in pebbledb at", pebDbPath)
 	pdb, err := pebble.Open(pebDbPath, &pebble.Options{})
 	if err != nil {
-		return nil, err
+		// BTW "resource temporarily unavailable" could be caused by the system crashing and not having cleaned up the lock file.
+		// If you manually remove the lock file, you can start the server again.
+		return nil, fmt.Errorf("error opening: %v", err)
 	}
 
 	c := &EveCache{
@@ -38,6 +40,9 @@ type EveCache struct {
 
 // Get returns the []byte representation of the response and true if present, false if not
 func (c *EveCache) Get(key string) (resp []byte, ok bool) {
+	if c == nil {
+		panic("EveCache is nil")
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
