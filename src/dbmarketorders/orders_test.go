@@ -47,7 +47,7 @@ func TestLoadMarketOrders(t *testing.T) {
 	if err != nil {
 		t.Fatal("error creating random temp dir: ", err)
 	}
-	dbm, err := New(mockEveLand, n)
+	dbm, err := New(mockEveLand, n, false)
 	if err != nil {
 		t.Fatal("error creating new OrderDataDB: ", err)
 	}

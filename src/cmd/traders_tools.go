@@ -43,7 +43,7 @@ func addTradersToolsCommands(rootCmd *cobra.Command, eveSDK *evesdk.EveLand, dbp
 				return
 			}
 
-			dbm, err := dbmarketorders.New(eveSDK, dbpath)
+			dbm, err := dbmarketorders.New(eveSDK, dbpath, false)
 			if err != nil {
 				fmt.Println("error creating db marketorders: ", err)
 				return

@@ -21,7 +21,9 @@ type OrderDataDB struct {
 
 	dbpath      string
 	blugeConfig bluge.Config
-	index       *bluge.Writer
+
+	index        *bluge.Writer
+	offlineIndex *bluge.OfflineWriter
 }
 
 func RemoveDB(dbpath string) error {
@@ -37,7 +39,7 @@ func RemoveDB(dbpath string) error {
 	return nil
 }
 
-func New(eveSDK EveLand, dbpath string) (*OrderDataDB, error) {
+func New(eveSDK EveLand, dbpath string, isOffline bool) (*OrderDataDB, error) {
 	odb := &OrderDataDB{
 		eveSDK: eveSDK,
 	}
@@ -52,20 +54,40 @@ func New(eveSDK EveLand, dbpath string) (*OrderDataDB, error) {
 	config := bluge.DefaultConfig(odb.dbpath)
 	odb.blugeConfig = config
 
-	w, err := bluge.OpenWriter(config)
-	if err != nil {
-		return nil, fmt.Errorf("error opening bluge index: %v", err)
+	if !isOffline {
+		w, err := bluge.OpenWriter(config)
+		if err != nil {
+			return nil, fmt.Errorf("error opening bluge index: %v", err)
+		}
+		odb.index = w
 	}
-	odb.index = w
+
+	if isOffline {
+		var offlineIndex, err = bluge.OpenOfflineWriter(config, 1000, 1)
+		if err != nil {
+			return nil, fmt.Errorf("error opening bluge index writer: %v", err)
+		}
+		odb.offlineIndex = offlineIndex
+	}
 
 	return odb, nil
 }
 
 // Close closes the open database.
 func (o *OrderDataDB) Close() error {
-	err := o.index.Close()
-	if err != nil {
-		return fmt.Errorf("error closing Bluge index writer: %v", err)
+
+	if o.index != nil {
+		err := o.index.Close()
+		if err != nil {
+			return fmt.Errorf("error closing Bluge index writer: %v", err)
+		}
+	}
+
+	if o.offlineIndex != nil {
+		err := o.offlineIndex.Close()
+		if err != nil {
+			err = fmt.Errorf("error closing Bluge index writer: %v", err)
+		}
 	}
 
 	return nil
@@ -195,6 +217,7 @@ func (o *OrderDataDB) GetMarketOrdersBySystemID(ctx context.Context, systemID in
 }
 
 func (o *OrderDataDB) LoadMarketOrders(ctx context.Context, region *evesdk.Region) (found int, err error) {
+
 	// List all market orders.
 	if o == nil {
 		return 0, fmt.Errorf("OrderDataDB is nil")
@@ -207,9 +230,8 @@ func (o *OrderDataDB) LoadMarketOrders(ctx context.Context, region *evesdk.Regio
 		return 0, fmt.Errorf("error while trying to list all market orders: %v", err)
 	}
 
-	batch := bluge.NewBatch()
 	count := 0
-	for i, order := range orders {
+	for _, order := range orders {
 		orderIdAsBytes := OrderIdKey(order.OrderID)
 
 		//doc := bluge.NewDocument(orderIdAsBytes)
@@ -231,20 +253,9 @@ func (o *OrderDataDB) LoadMarketOrders(ctx context.Context, region *evesdk.Regio
 			AddField(bluge.NewNumericField("duration", float64(order.Duration)).StoreValue()).
 			AddField(bluge.NewTextField("range", order.Range_).StoreValue())
 
-		batch.Update(doc.ID(), doc)
-		if i%100 == 0 {
-			err = o.index.Batch(batch)
-			if err != nil {
-				return 0, fmt.Errorf("error writing to index: %v", err)
-			}
-			batch.Reset()
-		}
-		count = count + 1
-	}
+		o.offlineIndex.Insert(doc)
 
-	err = o.index.Batch(batch)
-	if err != nil {
-		return 0, fmt.Errorf("error writing to index: %v", err)
+		count = count + 1
 	}
 
 	return count, nil
