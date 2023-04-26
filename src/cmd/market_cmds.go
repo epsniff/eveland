@@ -19,7 +19,7 @@ func addMarketOrdersCommands(rootCmd *cobra.Command, eveSDK *evesdk.EveLand, dbp
 		Run: func(cmd *cobra.Command, args []string) {
 			dbmarketorders.RemoveDB(dbpath)
 
-			dbm, err := dbmarketorders.New(eveSDK, dbpath)
+			dbm, err := dbmarketorders.New(eveSDK, dbpath, true)
 			if err != nil {
 				fmt.Println("error creating db marketorders: ", err)
 				return
